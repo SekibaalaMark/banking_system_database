@@ -117,3 +117,111 @@ def add_employee(request):
             )
     
     return JsonResponse({"error": "Only POST method allowed"}, status=405)
+
+
+
+
+from decimal import Decimal
+
+@csrf_exempt
+def add_account(request):
+    if request.method == "POST":
+        try:
+            # Handle both JSON and form-data
+            if request.content_type == 'application/json':
+                data = json.loads(request.body)
+            else:
+                data = request.POST
+            
+            # Extract and validate data
+            account_number = str(data['account_number'])
+            customer_id = int(data['customer_id'])
+            account_type = str(data['account_type'])
+            status = str(data['status']).lower()
+            
+            # Balance is optional (defaults to 0.00 if not provided)
+            balance = Decimal(data.get('balance', '0.00'))
+            
+            # date_opened is optional (defaults to current date if not provided)
+            date_opened = data.get('date_opened', None)
+            
+            # Validate account_type
+            valid_account_types = ['Savings', 'Fixed', 'Current']
+            if account_type not in valid_account_types:
+                return JsonResponse(
+                    {"error": f"Account type must be one of: {', '.join(valid_account_types)}"}, 
+                    status=400
+                )
+            
+            # Validate status
+            valid_statuses = ['active', 'frozen', 'closed']
+            if status not in valid_statuses:
+                return JsonResponse(
+                    {"error": f"Status must be one of: {', '.join(valid_statuses)}"}, 
+                    status=400
+                )
+            
+            # Validate date format if provided
+            if date_opened:
+                try:
+                    datetime.strptime(date_opened, '%Y-%m-%d')
+                except ValueError:
+                    return JsonResponse(
+                        {"error": "Date format must be YYYY-MM-DD"}, 
+                        status=400
+                    )
+            
+            # Validate account_number length (should be 11 characters)
+            if len(account_number) != 11:
+                return JsonResponse(
+                    {"error": "Account number must be exactly 11 characters"}, 
+                    status=400
+                )
+            
+            # Insert into database
+            with connection.cursor() as cursor:
+                if date_opened:
+                    cursor.execute("""
+                        INSERT INTO ACCOUNTS 
+                        (account_number, customer_id, account_type, balance, date_opened, status)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                    """, [
+                        account_number, customer_id, account_type, 
+                        balance, date_opened, status
+                    ])
+                else:
+                    # Let MySQL use the default CURDATE() for date_opened
+                    cursor.execute("""
+                        INSERT INTO ACCOUNTS 
+                        (account_number, customer_id, account_type, balance, status)
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, [
+                        account_number, customer_id, account_type, 
+                        balance, status
+                    ])
+            
+            return JsonResponse({
+                "message": "Account added successfully",
+                "account_number": account_number,
+                "balance": str(balance),
+                "account_type": account_type,
+                "status": status
+            }, status=201)
+            
+        except KeyError as e:
+            return JsonResponse(
+                {"error": f"Missing required field: {str(e)}"}, 
+                status=400
+            )
+        except ValueError as e:
+            return JsonResponse(
+                {"error": f"Invalid data type: {str(e)}"}, 
+                status=400
+            )
+        except Exception as e:
+            return JsonResponse(
+                {"error": f"Database error: {str(e)}"}, 
+                status=500
+            )
+    
+    return JsonResponse({"error": "Only POST method allowed"}, status=405)
