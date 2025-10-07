@@ -467,3 +467,188 @@ def make_transaction(request):
             )
     
     return JsonResponse({"error": "Only POST method allowed"}, status=405)
+
+
+
+
+@csrf_exempt
+def create_loan(request):
+    if request.method == "POST":
+        try:
+            # Handle both JSON and form-data
+            if request.content_type == 'application/json':
+                data = json.loads(request.body)
+            else:
+                data = request.POST
+            
+            # Extract and validate data
+            account_number = str(data['account_number'])
+            amount = Decimal(data['amount'])
+            interest = int(data['interest'])
+            term = int(data['term'])
+            end_date = str(data['end_date'])
+            branch_id = int(data['branch_id'])
+            
+            # status is optional (defaults to 'active' if not provided)
+            status = str(data.get('status', 'active')).lower()
+            
+            # start_date is optional (defaults to current date if not provided)
+            start_date = data.get('start_date', None)
+            
+            # Validate account_number length
+            if len(account_number) != 11:
+                return JsonResponse(
+                    {"error": "Account number must be exactly 11 characters"}, 
+                    status=400
+                )
+            
+            # Validate amount
+            if amount <= 0:
+                return JsonResponse(
+                    {"error": "Loan amount must be greater than 0"}, 
+                    status=400
+                )
+            
+            # Validate interest rate
+            if interest < 0 or interest > 100:
+                return JsonResponse(
+                    {"error": "Interest rate must be between 0 and 100"}, 
+                    status=400
+                )
+            
+            # Validate term (in months, typically)
+            if term <= 0:
+                return JsonResponse(
+                    {"error": "Loan term must be greater than 0"}, 
+                    status=400
+                )
+            
+            # Validate status
+            valid_statuses = ['active', 'paid', 'default']
+            if status not in valid_statuses:
+                return JsonResponse(
+                    {"error": f"Status must be one of: {', '.join(valid_statuses)}"}, 
+                    status=400
+                )
+            
+            # Validate date formats
+            if start_date:
+                try:
+                    datetime.strptime(start_date, '%Y-%m-%d')
+                except ValueError:
+                    return JsonResponse(
+                        {"error": "Start date format must be YYYY-MM-DD"}, 
+                        status=400
+                    )
+            
+            try:
+                end_date_obj = datetime.strptime(end_date, '%Y-%m-%d')
+            except ValueError:
+                return JsonResponse(
+                    {"error": "End date format must be YYYY-MM-DD"}, 
+                    status=400
+                )
+            
+            # Validate that end_date is in the future
+            if start_date:
+                start_date_obj = datetime.strptime(start_date, '%Y-%m-%d')
+                if end_date_obj <= start_date_obj:
+                    return JsonResponse(
+                        {"error": "End date must be after start date"}, 
+                        status=400
+                    )
+            
+            # Process loan creation in database
+            with connection.cursor() as cursor:
+                # Check if account exists and is active
+                cursor.execute("""
+                    SELECT status, account_type 
+                    FROM ACCOUNTS 
+                    WHERE account_number = %s
+                """, [account_number])
+                
+                account = cursor.fetchone()
+                
+                if not account:
+                    return JsonResponse(
+                        {"error": "Account not found"}, 
+                        status=404
+                    )
+                
+                account_status = account[0]
+                
+                if account_status != 'active':
+                    return JsonResponse(
+                        {"error": f"Cannot create loan. Account status is '{account_status}'"}, 
+                        status=400
+                    )
+                
+                # Check if branch exists
+                cursor.execute("""
+                    SELECT branch_name 
+                    FROM BRANCH 
+                    WHERE branch_id = %s
+                """, [branch_id])
+                
+                branch = cursor.fetchone()
+                
+                if not branch:
+                    return JsonResponse(
+                        {"error": "Branch not found"}, 
+                        status=404
+                    )
+                
+                # Insert loan record
+                if start_date:
+                    cursor.execute("""
+                        INSERT INTO LOANS 
+                        (account_number, amount, interest, term, start_date, end_date, branch_id, status)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """, [account_number, amount, interest, term, start_date, end_date, branch_id, status])
+                else:
+                    # Let MySQL use the default CURDATE() for start_date
+                    cursor.execute("""
+                        INSERT INTO LOANS 
+                        (account_number, amount, interest, term, end_date, branch_id, status)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """, [account_number, amount, interest, term, end_date, branch_id, status])
+                
+                # Get the loan ID of the inserted record
+                loan_id = cursor.lastrowid
+                
+                # Optional: Deposit loan amount into the account
+                cursor.execute("""
+                    UPDATE ACCOUNTS 
+                    SET balance = balance + %s 
+                    WHERE account_number = %s
+                """, [amount, account_number])
+            
+            return JsonResponse({
+                "message": "Loan created successfully",
+                "loan_id": loan_id,
+                "account_number": account_number,
+                "amount": str(amount),
+                "interest": interest,
+                "term": term,
+                "end_date": end_date,
+                "branch_id": branch_id,
+                "status": status
+            }, status=201)
+            
+        except KeyError as e:
+            return JsonResponse(
+                {"error": f"Missing required field: {str(e)}"}, 
+                status=400
+            )
+        except ValueError as e:
+            return JsonResponse(
+                {"error": f"Invalid data type: {str(e)}"}, 
+                status=400
+            )
+        except Exception as e:
+            return JsonResponse(
+                {"error": f"Database error: {str(e)}"}, 
+                status=500
+            )
+    
+    return JsonResponse({"error": "Only POST method allowed"}, status=405)
