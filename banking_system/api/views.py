@@ -652,3 +652,149 @@ def create_loan(request):
             )
     
     return JsonResponse({"error": "Only POST method allowed"}, status=405)
+
+
+
+
+
+
+@csrf_exempt
+def add_collateral(request):
+    if request.method == "POST":
+        try:
+            # Handle both JSON and form-data
+            if request.content_type == 'application/json':
+                data = json.loads(request.body)
+            else:
+                data = request.POST
+            
+            # Extract and validate data
+            loan_id = int(data['loan_id'])
+            collateral_type = str(data['type'])
+            description = str(data['description'])
+            value = Decimal(data['value'])
+            ownership_details = str(data['ownership_details'])
+            status = str(data['status'])
+            
+            # Validate collateral value
+            if value <= 0:
+                return JsonResponse(
+                    {"error": "Collateral value must be greater than 0"}, 
+                    status=400
+                )
+            
+            # Validate required string fields are not empty
+            if not collateral_type.strip():
+                return JsonResponse(
+                    {"error": "Collateral type cannot be empty"}, 
+                    status=400
+                )
+            
+            if not description.strip():
+                return JsonResponse(
+                    {"error": "Description cannot be empty"}, 
+                    status=400
+                )
+            
+            if not ownership_details.strip():
+                return JsonResponse(
+                    {"error": "Ownership details cannot be empty"}, 
+                    status=400
+                )
+            
+            if not status.strip():
+                return JsonResponse(
+                    {"error": "Status cannot be empty"}, 
+                    status=400
+                )
+            
+            # Validate field lengths
+            if len(collateral_type) > 100:
+                return JsonResponse(
+                    {"error": "Collateral type must not exceed 100 characters"}, 
+                    status=400
+                )
+            
+            if len(description) > 255:
+                return JsonResponse(
+                    {"error": "Description must not exceed 255 characters"}, 
+                    status=400
+                )
+            
+            if len(ownership_details) > 500:
+                return JsonResponse(
+                    {"error": "Ownership details must not exceed 500 characters"}, 
+                    status=400
+                )
+            
+            if len(status) > 30:
+                return JsonResponse(
+                    {"error": "Status must not exceed 30 characters"}, 
+                    status=400
+                )
+            
+            # Process collateral addition in database
+            with connection.cursor() as cursor:
+                # Check if loan exists
+                cursor.execute("""
+                    SELECT loan_id, amount, status 
+                    FROM LOANS 
+                    WHERE loan_id = %s
+                """, [loan_id])
+                
+                loan = cursor.fetchone()
+                
+                if not loan:
+                    return JsonResponse(
+                        {"error": "Loan not found"}, 
+                        status=404
+                    )
+                
+                loan_status = loan[2]
+                loan_amount = loan[1]
+                
+                # Optional: Warn if loan is not active
+                if loan_status != 'active':
+                    return JsonResponse(
+                        {"warning": f"Loan status is '{loan_status}', but collateral will be added"},
+                        status=200
+                    )
+                
+                # Insert collateral record
+                cursor.execute("""
+                    INSERT INTO COLLATERAL_SECURITIES 
+                    (loan_id, type, description, value, ownership_details, status)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, [loan_id, collateral_type, description, value, ownership_details, status])
+                
+                # Get the collateral ID of the inserted record
+                collateral_id = cursor.lastrowid
+            
+            return JsonResponse({
+                "message": "Collateral security added successfully",
+                "collateral_id": collateral_id,
+                "loan_id": loan_id,
+                "type": collateral_type,
+                "description": description,
+                "value": str(value),
+                "ownership_details": ownership_details,
+                "status": status
+            }, status=201)
+            
+        except KeyError as e:
+            return JsonResponse(
+                {"error": f"Missing required field: {str(e)}"}, 
+                status=400
+            )
+        except ValueError as e:
+            return JsonResponse(
+                {"error": f"Invalid data type: {str(e)}"}, 
+                status=400
+            )
+        except Exception as e:
+            return JsonResponse(
+                {"error": f"Database error: {str(e)}"}, 
+                status=500
+            )
+    
+    return JsonResponse({"error": "Only POST method allowed"}, status=405)
