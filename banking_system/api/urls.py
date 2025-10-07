@@ -7,7 +7,8 @@ urlpatterns=[
     path('add_account/',views.add_account),
     path('add_customer/',views.add_customer),
     path('make_transaction/',views.make_transaction),
-    path('create_loan/',views.create_loan)
+    path('create_loan/',views.create_loan),
+    path('add_collateral/',views.add_collateral),
 
 
 ]
