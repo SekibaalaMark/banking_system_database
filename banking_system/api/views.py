@@ -121,8 +121,106 @@ def add_employee(request):
 
 
 
-from decimal import Decimal
 
+@csrf_exempt
+def add_customer(request):
+    if request.method == "POST":
+        try:
+            # Handle both JSON and form-data
+            if request.content_type == 'application/json':
+                data = json.loads(request.body)
+            else:
+                data = request.POST
+            
+            # Extract and validate data
+            first_name = str(data['first_name'])
+            last_name = str(data['last_name'])
+            date_of_birth = data['date_of_birth']  # Format: YYYY-MM-DD
+            phone_contact = str(data['phone_contact'])
+            NIN_number = str(data['NIN_number'])
+            branch_id = int(data['branch_id'])
+            
+            # Handle both 'Gender' and 'gender' keys
+            gender = str(data.get('Gender') or data.get('gender', '')).upper()
+            
+            # Validate gender
+            if gender not in ['F', 'M']:
+                return JsonResponse(
+                    {"error": "Gender must be 'F' or 'M'"}, 
+                    status=400
+                )
+            
+            # Validate date format
+            try:
+                datetime.strptime(date_of_birth, '%Y-%m-%d')
+            except ValueError:
+                return JsonResponse(
+                    {"error": "Date format must be YYYY-MM-DD"}, 
+                    status=400
+                )
+            
+            # Validate NIN_number length (should be 14 characters)
+            if len(NIN_number) != 14:
+                return JsonResponse(
+                    {"error": "NIN number must be exactly 14 characters"}, 
+                    status=400
+                )
+            
+            # Check if branch exists
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT branch_id FROM Branch WHERE branch_id = %s", [branch_id])
+                branch = cursor.fetchone()
+                
+                if not branch:
+                    return JsonResponse(
+                        {"error": f"Branch with ID {branch_id} does not exist"}, 
+                        status=404
+                    )
+                
+                # Insert into database
+                cursor.execute("""
+                    INSERT INTO customers 
+                    (first_name, last_name, date_of_birth, phone_contact, 
+                     NIN_number, branch_id, Gender)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """, [
+                    first_name, last_name, date_of_birth, phone_contact,
+                    NIN_number, branch_id, gender
+                ])
+                
+                # Get the ID of the inserted customer
+                customer_id = cursor.lastrowid
+            
+            return JsonResponse({
+                "message": "Customer added successfully",
+                "customer_id": customer_id,
+                "first_name": first_name,
+                "last_name": last_name,
+                "NIN_number": NIN_number
+            }, status=201)
+            
+        except KeyError as e:
+            return JsonResponse(
+                {"error": f"Missing required field: {str(e)}"}, 
+                status=400
+            )
+        except ValueError as e:
+            return JsonResponse(
+                {"error": f"Invalid data type: {str(e)}"}, 
+                status=400
+            )
+        except Exception as e:
+            return JsonResponse(
+                {"error": f"Database error: {str(e)}"}, 
+                status=500
+            )
+    
+    return JsonResponse({"error": "Only POST method allowed"}, status=405)
+
+
+
+
+from decimal import Decimal
 @csrf_exempt
 def add_account(request):
     if request.method == "POST":
@@ -206,6 +304,150 @@ def add_account(request):
                 "balance": str(balance),
                 "account_type": account_type,
                 "status": status
+            }, status=201)
+            
+        except KeyError as e:
+            return JsonResponse(
+                {"error": f"Missing required field: {str(e)}"}, 
+                status=400
+            )
+        except ValueError as e:
+            return JsonResponse(
+                {"error": f"Invalid data type: {str(e)}"}, 
+                status=400
+            )
+        except Exception as e:
+            return JsonResponse(
+                {"error": f"Database error: {str(e)}"}, 
+                status=500
+            )
+    
+    return JsonResponse({"error": "Only POST method allowed"}, status=405)
+
+
+
+
+@csrf_exempt
+def make_transaction(request):
+    if request.method == "POST":
+        try:
+            # Handle both JSON and form-data
+            if request.content_type == 'application/json':
+                data = json.loads(request.body)
+            else:
+                data = request.POST
+            
+            # Extract and validate data
+            account_number = str(data['account_number'])
+            transaction_type = str(data['type']).lower()
+            amount = Decimal(data['amount'])
+            
+            # date_of_transaction is optional (defaults to current date if not provided)
+            date_of_transaction = data.get('date_of_transaction', None)
+            
+            # Validate transaction type
+            valid_types = ['deposit', 'withdraw']
+            if transaction_type not in valid_types:
+                return JsonResponse(
+                    {"error": f"Transaction type must be one of: {', '.join(valid_types)}"}, 
+                    status=400
+                )
+            
+            # Validate amount
+            if amount <= 0:
+                return JsonResponse(
+                    {"error": "Amount must be greater than 0"}, 
+                    status=400
+                )
+            
+            # Validate date format if provided
+            if date_of_transaction:
+                try:
+                    datetime.strptime(date_of_transaction, '%Y-%m-%d')
+                except ValueError:
+                    return JsonResponse(
+                        {"error": "Date format must be YYYY-MM-DD"}, 
+                        status=400
+                    )
+            
+            # Validate account_number length
+            if len(account_number) != 11:
+                return JsonResponse(
+                    {"error": "Account number must be exactly 11 characters"}, 
+                    status=400
+                )
+            
+            # Process transaction in database
+            with connection.cursor() as cursor:
+                # Check if account exists and get current balance and status
+                cursor.execute("""
+                    SELECT balance, status 
+                    FROM ACCOUNTS 
+                    WHERE account_number = %s
+                """, [account_number])
+                
+                account = cursor.fetchone()
+                
+                if not account:
+                    return JsonResponse(
+                        {"error": "Account not found"}, 
+                        status=404
+                    )
+                
+                current_balance = account[0]
+                account_status = account[1]
+                
+                # Check if account is active
+                if account_status != 'active':
+                    return JsonResponse(
+                        {"error": f"Cannot process transaction. Account status is '{account_status}'"}, 
+                        status=400
+                    )
+                
+                # Check sufficient balance for withdrawals
+                if transaction_type == 'withdraw':
+                    if current_balance < amount:
+                        return JsonResponse(
+                            {"error": f"Insufficient balance. Current balance: {current_balance}"}, 
+                            status=400
+                        )
+                    new_balance = current_balance - amount
+                else:  # deposit
+                    new_balance = current_balance + amount
+                
+                # Insert transaction record
+                if date_of_transaction:
+                    cursor.execute("""
+                        INSERT INTO TRANSACTIONS 
+                        (account_number, type, amount, date_of_transaction)
+                        VALUES (%s, %s, %s, %s)
+                    """, [account_number, transaction_type, amount, date_of_transaction])
+                else:
+                    # Let MySQL use the default CURDATE() for date_of_transaction
+                    cursor.execute("""
+                        INSERT INTO TRANSACTIONS 
+                        (account_number, type, amount)
+                        VALUES (%s, %s, %s)
+                    """, [account_number, transaction_type, amount])
+                
+                # Get the transaction ID of the inserted record
+                transaction_id = cursor.lastrowid
+                
+                # Update account balance
+                cursor.execute("""
+                    UPDATE ACCOUNTS 
+                    SET balance = %s 
+                    WHERE account_number = %s
+                """, [new_balance, account_number])
+            
+            return JsonResponse({
+                "message": "Transaction completed successfully",
+                "transaction_id": transaction_id,
+                "account_number": account_number,
+                "type": transaction_type,
+                "amount": str(amount),
+                "previous_balance": str(current_balance),
+                "new_balance": str(new_balance)
             }, status=201)
             
         except KeyError as e:
